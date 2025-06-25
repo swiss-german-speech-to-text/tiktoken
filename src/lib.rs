@@ -531,7 +531,13 @@ impl CoreBPE {
     fn _encode_bytes(&self, py: Python, bytes: &[u8], dropout_prob: f32) -> Vec<usize> {
         py.allow_threads(|| {
             match std::str::from_utf8(bytes) {
-                Ok(text) => self._encode_ordinary_native(text),
+                Ok(text) => {
+                    let (tokens, last_piece_token_len) =
+                        self._encode_native(text, dropout_prob, &HashSet::new());
+                    let (tokens, _) =
+                        self._increase_last_piece_token_len(tokens, last_piece_token_len);
+                    tokens
+                }
                 Err(e) => {
                     let text = unsafe { std::str::from_utf8_unchecked(&bytes[..e.valid_up_to()]) };
                     let (tokens, last_piece_token_len) =
