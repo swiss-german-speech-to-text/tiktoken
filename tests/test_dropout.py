@@ -94,3 +94,27 @@ def test_dropout_probability_one_is_repeatable_and_differs_from_default_bytes(te
     tokens_dropout2 = enc._encode_bytes(data, dropout_prob=1.0)
     assert tokens_dropout1 == tokens_dropout2
     assert tokens_dropout1 != tokens_default
+
+
+@pytest.mark.parametrize(
+    "text, suffix",
+    [
+        ("SwissAir", b"\x80"),
+        ("Vincenzo Timmel", b"\xff"),
+    ],
+)
+def test_dropout_probability_invalid_utf8_bytes(text: str, suffix: bytes):
+    """
+    A dropout_prob of 0.0 for bytes containing invalid UTF-8 (appended to a valid text prefix)
+    should match default behavior, and dropout_prob=1.0 should be deterministic and differ.
+    """
+    enc = tiktoken.encoding_for_model("gpt-4")
+    data = text.encode("utf-8") + suffix
+    tokens_default = enc._encode_bytes(data)
+    tokens_no_dropout = enc._encode_bytes(data, dropout_prob=0.0)
+    assert tokens_no_dropout == tokens_default
+
+    tokens_dropout1 = enc._encode_bytes(data, dropout_prob=1.0)
+    tokens_dropout2 = enc._encode_bytes(data, dropout_prob=1.0)
+    assert tokens_dropout1 == tokens_dropout2
+    assert tokens_dropout1 != tokens_default
