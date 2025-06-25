@@ -219,3 +219,17 @@ def train_simple_encoding():
     assert enc.decode_tokens_bytes(tokens) == [b"hello", b" world"]
 
     return enc
+
+
+def test_show_bpe_dropout():
+    enc = tiktoken.encoding_for_model("gpt-4")
+
+    # Use a single piece of text (no spaces) to force BPE merges for dropout demonstration
+    text = "This is just unbelievable! SwissAir grounded! Vincenzo Timmel @ FHNW."
+    for p in range(0, 110, 10):
+        print(f"p={p}%")
+        print(enc.encode(text, dropout_prob=p / 100.0))
+
+
+if __name__ == "__main__":
+    test_show_bpe_dropout()
