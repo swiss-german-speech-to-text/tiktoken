@@ -80,7 +80,8 @@ fn _byte_pair_merge<T>(
             let i = min_rank.1;
             // BPE Dropout
             if rand::random::<f32>() < dropout_prob {
-                break;
+                parts[i].1 = usize::MAX;
+                continue;
             }
 
             // NOTE: We are about to remove parts[i + 1]. We do not do it

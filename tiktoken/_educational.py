@@ -222,14 +222,17 @@ def train_simple_encoding():
 
 
 def test_show_bpe_dropout():
-    enc = tiktoken.encoding_for_model("gpt-4")
+    enc = tiktoken.encoding_for_model("gpt2")
 
     # Use a single piece of text (no spaces) to force BPE merges for dropout demonstration
-    text = "This is just unbelievable! SwissAir grounded! Vincenzo Timmel @ FHNW."
+    text = "SwissAir.  Vincenzo Timmel"
     for p in range(0, 110, 10):
         print(f"p={p}%")
-        print(enc.encode(text, dropout_prob=p / 100.0))
-
+        encoded = enc.encode(text, dropout_prob=p / 100.0)
+        decoded = enc.decode(encoded)
+        print(f"encoded: {encoded}")
+        print(f"decoded: {decoded}")
+ 
 
 if __name__ == "__main__":
     test_show_bpe_dropout()
