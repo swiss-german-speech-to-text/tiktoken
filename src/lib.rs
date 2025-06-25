@@ -14,13 +14,17 @@ use rustc_hash::FxHashMap as HashMap;
 fn _byte_pair_merge<T>(
     piece: &[u8],
     ranks: &HashMap<Vec<u8>, usize>,
+    dropout_prob: f32,
     f: impl Fn(std::ops::Range<usize>) -> T,
 ) -> Vec<T> {
     // This is a vector of (start, rank).
     // The rank is of the byte pair starting at position start.
     // The rank of the last item in the vector is not a valid value.
     let mut parts: Vec<(usize, usize)> = (0..piece.len() + 1).map(|i| (i, usize::MAX)).collect();
+    // [(0,∞), (1,∞), (2,∞), …, (n,∞)]
 
+    // Get Rank of the byte pair starting at position start_idx. Usually, skip is always 0 (?).
+    // This maps every byte pair to its rank. If the byte pair is not in the ranks, it returns None.
     let get_rank = {
         #[inline(always)]
         |parts: &Vec<(usize, usize)>, start_idx: usize, skip: usize| {
@@ -74,6 +78,10 @@ fn _byte_pair_merge<T>(
 
         if min_rank.0 != usize::MAX {
             let i = min_rank.1;
+            // BPE Dropout
+            if rand::random::<f32>() < dropout_prob {
+                break;
+            }
 
             // NOTE: We are about to remove parts[i + 1]. We do not do it
             // yet because there are cache-locality benefits to updating
@@ -97,18 +105,28 @@ fn _byte_pair_merge<T>(
     out
 }
 
-pub fn byte_pair_encode(piece: &[u8], ranks: &HashMap<Vec<u8>, usize>) -> Vec<usize> {
+pub fn byte_pair_encode(
+    piece: &[u8],
+    ranks: &HashMap<Vec<u8>, usize>,
+    dropout_prob: f32,
+) -> Vec<usize> {
     if piece.len() == 1 {
         return vec![ranks[piece]];
     }
-    _byte_pair_merge(piece, ranks, |p| ranks[&piece[p.start..p.end]])
+    _byte_pair_merge(piece, ranks, dropout_prob, |p| {
+        ranks[&piece[p.start..p.end]]
+    })
 }
 
-pub fn byte_pair_split<'a>(piece: &'a [u8], ranks: &HashMap<Vec<u8>, usize>) -> Vec<&'a [u8]> {
+pub fn byte_pair_split<'a>(
+    piece: &'a [u8],
+    ranks: &HashMap<Vec<u8>, usize>,
+    dropout_prob: f32,
+) -> Vec<&'a [u8]> {
     if piece.len() == 1 {
         return vec![piece];
     }
-    _byte_pair_merge(piece, ranks, |p| &piece[p.start..p.end])
+    _byte_pair_merge(piece, ranks, dropout_prob, |p| &piece[p.start..p.end])
 }
 
 // Various performance notes:
@@ -215,12 +233,17 @@ impl CoreBPE {
                 ret.push(*token);
                 continue;
             }
-            ret.extend(&byte_pair_encode(piece, &self.encoder));
+            ret.extend(&byte_pair_encode(piece, &self.encoder, 0.0));
         }
         ret
     }
 
-    fn _encode_native(&self, text: &str, allowed_special: &HashSet<&str>) -> (Vec<usize>, usize) {
+    fn _encode_native(
+        &self,
+        text: &str,
+        dropout_prob: f32,
+        allowed_special: &HashSet<&str>,
+    ) -> (Vec<usize>, usize) {
         let special_regex = self._get_tl_special_regex();
         let regex = self._get_tl_regex();
         let mut ret = vec![];
@@ -253,7 +276,7 @@ impl CoreBPE {
                     ret.push(*token);
                     continue;
                 }
-                let tokens = byte_pair_encode(piece, &self.encoder);
+                let tokens = byte_pair_encode(piece, &self.encoder, dropout_prob);
                 last_piece_token_len = tokens.len();
                 ret.extend(&tokens);
             }
@@ -318,9 +341,11 @@ impl CoreBPE {
     fn _encode_unstable_native(
         &self,
         text: &str,
+        dropout_prob: f32,
         allowed_special: &HashSet<&str>,
     ) -> (Vec<usize>, HashSet<Vec<usize>>) {
-        let (tokens, last_piece_token_len) = self._encode_native(text, allowed_special);
+        let (tokens, last_piece_token_len) =
+            self._encode_native(text, dropout_prob, allowed_special);
         if last_piece_token_len == 0 {
             // If last_piece_token_len is zero, the last token was a special token and we have
             // no unstable bytes
@@ -383,7 +408,7 @@ impl CoreBPE {
                     // would be a regex split before the UTF-8 truncation point.
                     // Probably niche enough that no one will ever notice (after all, people didn't
                     // notice all the big holes in the previous unstable token implementation)
-                    Err(_) => byte_pair_encode(&possibility, &self.encoder),
+                    Err(_) => byte_pair_encode(&possibility, &self.encoder, dropout_prob),
                     // Something like the following is intriguing but incorrect:
                     // Err(e) => self._encode_ordinary_native(unsafe {
                     //     std::str::from_utf8_unchecked(&possibility[..e.valid_up_to()])
@@ -419,10 +444,12 @@ impl CoreBPE {
                 let mut reencoded = byte_pair_encode(
                     &unstable_bytes[..unstable_bytes.len() - last_decoded.1],
                     &self.encoder,
+                    dropout_prob,
                 );
                 reencoded.extend(byte_pair_encode(
                     &unstable_bytes[unstable_bytes.len() - last_decoded.1..],
                     &self.encoder,
+                    dropout_prob,
                 ));
                 completions.insert(reencoded);
             }
@@ -490,17 +517,24 @@ impl CoreBPE {
         py.allow_threads(|| self._encode_ordinary_native(text))
     }
 
-    fn encode(&self, py: Python, text: &str, allowed_special: HashSet<&str>) -> Vec<usize> {
-        py.allow_threads(|| self._encode_native(text, &allowed_special).0)
+    fn encode(
+        &self,
+        py: Python,
+        text: &str,
+        dropout_prob: f32,
+        allowed_special: HashSet<&str>,
+    ) -> Vec<usize> {
+        py.allow_threads(|| self._encode_native(text, dropout_prob, &allowed_special).0)
     }
 
-    fn _encode_bytes(&self, py: Python, bytes: &[u8]) -> Vec<usize> {
+    fn _encode_bytes(&self, py: Python, bytes: &[u8], dropout_prob: f32) -> Vec<usize> {
         py.allow_threads(|| {
             match std::str::from_utf8(bytes) {
                 Ok(text) => self._encode_ordinary_native(text),
                 Err(e) => {
                     let text = unsafe { std::str::from_utf8_unchecked(&bytes[..e.valid_up_to()]) };
-                    let (tokens, last_piece_token_len) = self._encode_native(text, &HashSet::new());
+                    let (tokens, last_piece_token_len) =
+                        self._encode_native(text, dropout_prob, &HashSet::new());
                     let (mut tokens, last_piece_token_len) =
                         self._increase_last_piece_token_len(tokens, last_piece_token_len);
                     if !tokens.is_empty() && last_piece_token_len > 0 {
@@ -513,7 +547,11 @@ impl CoreBPE {
                         unstable_bytes.extend_from_slice(&bytes[e.valid_up_to()..]);
 
                         tokens.truncate(tokens.len() - last_piece_token_len);
-                        tokens.extend(byte_pair_encode(&unstable_bytes, &self.encoder));
+                        tokens.extend(byte_pair_encode(
+                            &unstable_bytes,
+                            &self.encoder,
+                            dropout_prob,
+                        ));
                     }
                     tokens
                 }
@@ -525,10 +563,11 @@ impl CoreBPE {
         &self,
         py: Python,
         text: &str,
+        dropout_prob: f32,
         allowed_special: HashSet<&str>,
     ) -> Py<PyTuple> {
         let (tokens, completions) =
-            py.allow_threads(|| self._encode_unstable_native(text, &allowed_special));
+            py.allow_threads(|| self._encode_unstable_native(text, dropout_prob, &allowed_special));
         let py_completions =
             PyList::new(py, completions.iter().map(|seq| PyList::new(py, &seq[..])));
         (tokens, py_completions).into_py(py)
@@ -550,7 +589,7 @@ impl CoreBPE {
         if let Some(token) = self.encoder.get(piece) {
             return vec![*token];
         }
-        byte_pair_encode(piece, &self.encoder)
+        byte_pair_encode(piece, &self.encoder, 0.0)
     }
 
     // ====================
@@ -602,7 +641,7 @@ mod tests {
         ranks.insert(b"ab".to_vec(), 1);
         ranks.insert(b"cd".to_vec(), 2);
 
-        let res = byte_pair_split(b"abcd", &ranks);
+        let res = byte_pair_split(b"abcd", &ranks, 0.0);
         assert_eq!(res, vec![b"ab", b"cd"]);
     }
 }

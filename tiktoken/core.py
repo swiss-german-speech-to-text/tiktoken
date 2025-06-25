@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 from concurrent.futures import ThreadPoolExecutor
-from typing import AbstractSet, Collection, Literal, NoReturn, Optional, Union
+from typing import AbstractSet, Collection, Literal, NoReturn, Optional, Union, Callable
 
 import regex
 
@@ -78,6 +78,7 @@ class Encoding:
     def encode(
         self,
         text: str,
+        dropout_prob: float = 0.0,
         *,
         allowed_special: Union[Literal["all"], AbstractSet[str]] = set(),  # noqa: B006
         disallowed_special: Union[Literal["all"], Collection[str]] = "all",
@@ -120,7 +121,7 @@ class Encoding:
                 raise_disallowed_special_token(match.group())
 
         try:
-            return self._core_bpe.encode(text, allowed_special)
+            return self._core_bpe.encode(text, dropout_prob, allowed_special)
         except UnicodeEncodeError:
             # BPE operates on bytes, but the regex operates on unicode. If we pass a str that is
             # invalid UTF-8 to Rust, it will rightfully complain. Here we do a quick and dirty
@@ -129,7 +130,7 @@ class Encoding:
             # string, but given that this is input we want to support, maybe that's okay.
             # Also we use errors="replace" to handle weird things like lone surrogates.
             text = text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
-            return self._core_bpe.encode(text, allowed_special)
+            return self._core_bpe.encode(text, dropout_prob, allowed_special)
 
     def encode_ordinary_batch(self, text: list[str], *, num_threads: int = 8) -> list[list[int]]:
         """Encodes a list of strings into tokens, in parallel, ignoring special tokens.
@@ -364,8 +365,8 @@ class Encoding:
             ret.extend(self._core_bpe.encode_single_piece(piece))
         return ret
 
-    def _encode_bytes(self, text: bytes) -> list[int]:
-        return self._core_bpe._encode_bytes(text)
+    def _encode_bytes(self, text: bytes, dropout_prob: float = 0.0) -> list[int]:
+        return self._core_bpe._encode_bytes(text, dropout_prob)
 
 
 
