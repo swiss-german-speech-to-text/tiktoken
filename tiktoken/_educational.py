@@ -225,7 +225,7 @@ def test_show_bpe_dropout():
     enc = tiktoken.encoding_for_model("gpt2")
 
     # Use a single piece of text (no spaces) to force BPE merges for dropout demonstration
-    text = "SwissAir.  Vincenzo Timmel"
+    text = "Theater"
     for p in range(0, 110, 10):
         print(f"p={p}%")
         encoded = enc.encode(text, dropout_prob=p / 100.0)
